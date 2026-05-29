@@ -19,7 +19,8 @@ const DEFAULT_SEGMENTS = [
 const PROCESS_NAMES = ["Browser","Editor","Server","Client","Game","Daemon","Shell","Proxy"];
 
 export default function SegmentationTab() {
-  const [state, setState]           = useState(() => createInitialState(128));
+  const [state, setState]           = useState(() => createInitialState(128, "first-fit"));
+  const [strategy, setStrategy]     = useState("first-fit");
   const [processName, setProcessName] = useState("Browser");
   const [segments, setSegments]     = useState(DEFAULT_SEGMENTS);
   const [addrProc, setAddrProc]     = useState("");
@@ -58,9 +59,14 @@ export default function SegmentationTab() {
   }, []);
 
   const handleReset = useCallback(() => {
-    setState(createInitialState(128));
+    setState(createInitialState(128, strategy));
     setAddrResult(null);
     setProcessName("Browser");
+  }, [strategy]);
+
+  const handleStrategyChange = useCallback((e) => {
+    setStrategy(e.target.value);
+    setState((s) => ({ ...s, strategy: e.target.value }));
   }, []);
 
   // ── Address translation ───────────────────────────────────
@@ -84,6 +90,15 @@ export default function SegmentationTab() {
           <h2 className="text-sm font-medium text-gray-800">Segmentation</h2>
           <p className="text-xs text-gray-400">Mỗi process gồm nhiều segment (code / data / heap / stack)</p>
         </div>
+        <select
+          value={state.strategy}
+          onChange={handleStrategyChange}
+          className="text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white text-gray-700"
+        >
+          <option value="first-fit">First Fit</option>
+          <option value="best-fit">Best Fit</option>
+          <option value="worst-fit">Worst Fit</option>
+        </select>
       </div>
 
       {/* Metrics */}
@@ -309,6 +324,27 @@ export default function SegmentationTab() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Trade-offs Analysis */}
+      <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm text-blue-800">
+        <h3 className="font-semibold mb-1 flex items-center gap-1">
+          📊 Evaluate Performance &amp; Trade-offs
+        </h3>
+        <ul className="list-disc list-inside space-y-1 text-xs">
+          <li>
+            <strong>Ưu điểm Segmentation:</strong> Phù hợp với cách lập trình viên nhìn process — code, data, heap, stack tách biệt. Không có internal fragmentation vì mỗi segment cấp phát đúng kích thước. Hỗ trợ bảo vệ ở mức segment (ví dụ code segment read-only).
+          </li>
+          <li>
+            <strong>Trade-off chiến lược ({state.strategy}):</strong> Mỗi segment cần vùng liên tục, nên vẫn phải dùng First/Best/Worst Fit giống Contiguous Allocation. Kết quả: vẫn có external fragmentation, nhưng ít hơn vì segment nhỏ hơn toàn bộ process.
+          </li>
+          <li>
+            <strong>So sánh với Contiguous:</strong> Segmentation chia process thành nhiều phần linh hoạt hơn, nhưng phức tạp hơn do cần segment table cho mỗi process.
+          </li>
+          <li>
+            <strong>So sánh với Paging:</strong> Segmentation không có internal frag nhưng có external frag. Paging ngược lại — không có external frag nhưng có internal frag. Segmentation phản ánh cấu trúc logic, Paging thì không.
+          </li>
+        </ul>
       </div>
 
       {/* Segment table */}

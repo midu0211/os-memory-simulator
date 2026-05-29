@@ -189,6 +189,53 @@ export function getMetrics(state) {
   };
 }
 
+export function compact(state) {
+  const allocated = state.blocks
+    .filter((b) => b.processId)
+    .sort((a, b) => a.start - b.start);
+
+  if (allocated.length === 0) return state;
+
+  const newBlocks = [];
+  let cursor = 0;
+
+  for (const block of allocated) {
+    newBlocks.push({
+      ...block,
+      id: uid(),
+      start: cursor,
+    });
+    cursor += block.size;
+  }
+
+  if (cursor < state.totalMemory) {
+    newBlocks.push({
+      id: uid(),
+      start: cursor,
+      size: state.totalMemory - cursor,
+      processId: null,
+      processName: null,
+      color: null,
+    });
+  }
+
+  const freed = state.totalMemory - cursor;
+  const event = {
+    type: "compact",
+    processId: "",
+    processName: "",
+    size: 0,
+    reason: `Compaction: gom ${allocated.length} blocks, tạo free block ${freed} KB liên tục`,
+    timestamp: Date.now(),
+  };
+
+  return {
+    ...state,
+    blocks: newBlocks,
+    events: [...state.events, event],
+  };
+}
+
 export function runFragmentationDemo(totalMemory = 64, strategy = "first-fit") {
   let s = createInitialState(totalMemory, strategy);
   for (const [name, size] of [

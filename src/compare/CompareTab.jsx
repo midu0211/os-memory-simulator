@@ -70,11 +70,11 @@ const PRESETS = [
 
 // ─── Chạy workload trên 4 simulator ─────────────────────────
 
-function runWorkload(preset) {
+function runWorkload(preset, contiguousStrategy = "first-fit") {
   const { processes, freeIndex, freeIndex2, freeIndex3 } = preset;
 
   // Contiguous
-  let cs = createContiguous(64, "first-fit");
+  let cs = createContiguous(64, contiguousStrategy);
   for (const p of processes) cs = contiguousAllocate(cs, p.name, p.size);
   if (freeIndex  != null && cs.processes[freeIndex])  cs = contiguousFree(cs, cs.processes[freeIndex].id);
   if (freeIndex2 != null && cs.processes[freeIndex2 - (freeIndex < freeIndex2 ? 1 : 0)]) {
@@ -95,16 +95,29 @@ function runWorkload(preset) {
   if (freeIndex3 != null) { const p = ps.processes.find(p => p.name === processes[freeIndex3]?.name); if (p) ps = pagingFree(ps, p.id); }
   const pm = getPagingMetrics(ps);
 
-  // Segmentation
-  const segProcs = processes.map(p => ({
-    name: p.name,
-    segments: [
-      { name: "code",  size: Math.max(2, Math.floor(p.size * 0.4)) },
-      { name: "data",  size: Math.max(2, Math.floor(p.size * 0.3)) },
-      { name: "stack", size: Math.max(2, Math.ceil(p.size * 0.3))  },
-    ],
-  }));
-  let ss = createSeg(128);
+  // Segmentation — fix: segments must sum to process size
+  const segProcs = processes.map(p => {
+    if (p.size <= 2) return { name: p.name, segments: [{ name: "code", size: p.size }] };
+    if (p.size <= 4) return {
+      name: p.name,
+      segments: [
+        { name: "code", size: Math.ceil(p.size / 2) },
+        { name: "data", size: Math.floor(p.size / 2) },
+      ],
+    };
+    const code  = Math.round(p.size * 0.4);
+    const data  = Math.round(p.size * 0.3);
+    const stack = p.size - code - data;
+    return {
+      name: p.name,
+      segments: [
+        { name: "code",  size: code },
+        { name: "data",  size: data },
+        { name: "stack", size: stack },
+      ],
+    };
+  });
+  let ss = createSeg(64, contiguousStrategy);
   for (const p of segProcs) ss = segAllocate(ss, p.name, p.segments);
   if (freeIndex  != null && ss.processes[freeIndex])  ss = segFree(ss, ss.processes[freeIndex].id);
   if (freeIndex2 != null) { const p = ss.processes.find(p => p.name === processes[freeIndex2]?.name); if (p) ss = segFree(ss, p.id); }
@@ -253,19 +266,27 @@ function CustomBuilder({ onRun }) {
 
 export default function CompareTab() {
   const [activePreset, setActivePreset] = useState("default");
-  const [data, setData]   = useState(() => runWorkload(PRESETS[0]));
-  const [showCustom, setShowCustom] = useState(false);
+  const [data, setData]                 = useState(() => runWorkload(PRESETS[0]));
+  const [showCustom, setShowCustom]     = useState(false);
+  const [strategy, setStrategy]         = useState("first-fit");
 
   const handlePreset = useCallback((preset) => {
     setActivePreset(preset.id);
-    setData(runWorkload(preset));
+    setData(runWorkload(preset, strategy));
     setShowCustom(false);
-  }, []);
+  }, [strategy]);
 
   const handleCustomRun = useCallback((preset) => {
     setActivePreset("custom");
-    setData(runWorkload(preset));
-  }, []);
+    setData(runWorkload(preset, strategy));
+  }, [strategy]);
+
+  const handleStrategyChange = useCallback((e) => {
+    const s = e.target.value;
+    setStrategy(s);
+    const preset = PRESETS.find(p => p.id === activePreset);
+    if (preset) setData(runWorkload(preset, s));
+  }, [activePreset]);
 
   const techniques    = Object.values(data);
   const currentPreset = PRESETS.find(p => p.id === activePreset);
@@ -279,19 +300,29 @@ export default function CompareTab() {
     <div className="p-4 space-y-4">
 
       {/* Header */}
-      <div>
-        <h2 className="text-sm font-medium text-gray-800">So sánh 4 kỹ thuật</h2>
-        <p className="text-xs text-gray-400 mt-0.5">
-          Chạy cùng một workload trên cả 4 simulator để so sánh hiệu năng
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-medium text-gray-800">So sánh 4 kỹ thuật</h2>
+          <p className="text-xs text-gray-400 mt-0.5">
+            Chạy cùng một workload trên cả 4 simulator để so sánh hiệu năng
+          </p>
+        </div>
+        <select
+          value={strategy}
+          onChange={handleStrategyChange}
+          className="text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white text-gray-700"
+        >
+          <option value="first-fit">First Fit</option>
+          <option value="best-fit">Best Fit</option>
+          <option value="worst-fit">Worst Fit</option>
+        </select>
       </div>
 
       {/* Disclaimer */}
       <div className="flex items-start gap-2 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
         <span className="text-amber-500 text-sm mt-0.5">ℹ</span>
         <p className="text-xs text-amber-700">
-          Số liệu bên dưới được tính từ workload mẫu chạy độc lập — không phản ánh
-          những gì bạn đang thao tác ở các tab khác.
+          Số liệu chạy trên 64 KB memory cho cả 4 kỹ thuật. Contiguous &amp; Segmentation dùng chiến lược <strong>{strategy}</strong>.
           Chọn preset hoặc tự tạo workload để thay đổi kết quả.
         </p>
       </div>
@@ -373,7 +404,7 @@ export default function CompareTab() {
             <Bar key={t.label} label={t.label} value={t.externalFrag} max={maxExtFrag} color={t.color} />
           ))}
           <p className="text-xs text-gray-400 mt-1.5">
-            Paging = 0% vì không cần vùng nhớ liên tục. Contiguous cao nhất do các hole rải rác sau khi free.
+            Paging = 0% vì không cần vùng nhớ liên tục. Contiguous &amp; Segmentation có ext. frag do các hole rải rác sau khi free. Chiến lược <strong>{strategy}</strong> ảnh hưởng mức độ phân mảnh.
           </p>
         </div>
 
@@ -386,7 +417,7 @@ export default function CompareTab() {
             <Bar key={t.label} label={t.label} value={t.internalFrag} max={maxIntFrag} color={t.color} />
           ))}
           <p className="text-xs text-gray-400 mt-1.5">
-            Contiguous và Segmentation = 0% vì cấp phát đúng kích thước. Paging lãng phí phần cuối page cuối cùng.
+            Contiguous &amp; Segmentation = 0% vì cấp phát đúng kích thước. Paging lãng phí phần cuối page ({data.paging.internalFrag}% in this workload).
           </p>
         </div>
 
@@ -475,12 +506,12 @@ export default function CompareTab() {
 
       {/* Kết luận */}
       <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 space-y-1.5">
-        <p className="text-xs font-medium text-blue-800">Kết luận</p>
+        <p className="text-xs font-medium text-blue-800">Kết luận ({strategy})</p>
         <ul className="text-xs text-blue-700 space-y-1 list-disc list-inside">
-          <li><strong>Contiguous</strong> — đơn giản, overhead thấp nhưng external fragmentation cao nhất.</li>
-          <li><strong>Paging</strong> — loại bỏ external fragmentation hoàn toàn, đổi lấy internal frag và overhead page table.</li>
-          <li><strong>Segmentation</strong> — phù hợp cấu trúc process (code/data/stack), không có internal frag nhưng vẫn có external frag.</li>
-          <li><strong>Virtual Memory</strong> — dùng nhiều hơn RAM vật lý nhờ swap, nhưng page fault làm tăng access time.</li>
+          <li><strong>Contiguous</strong> — đơn giản, overhead thấp nhưng external fragmentation {data.contiguous.externalFrag}% cao nhất.</li>
+          <li><strong>Paging</strong> — loại bỏ external fragmentation hoàn toàn (0%), đổi lấy internal frag {data.paging.internalFrag}% ({data.paging.internalFragKB} KB) và overhead page table ({data.paging.overheadNote}).</li>
+          <li><strong>Segmentation</strong> — phù hợp cấu trúc process (code/data/stack), không có internal frag, external frag {data.segmentation.externalFrag}%.</li>
+          <li><strong>Virtual Memory</strong> — dùng nhiều hơn RAM vật lý nhờ swap, page faults: {data.virtualMemory.pageFaults}.</li>
         </ul>
       </div>
 

@@ -3,6 +3,7 @@ import {
   createInitialState,
   allocate,
   freeProcess,
+  compact,
   getMetrics,
   runFragmentationDemo,
   runRandomWorkload,
@@ -50,6 +51,10 @@ export default function ContiguousTab() {
     setState(runRandomWorkload(64, state.strategy));
     setProcessName("P6");
   }, [state.strategy]);
+
+  const handleCompact = useCallback(() => {
+    setState((s) => compact(s));
+  }, []);
 
   // ── Render ────────────────────────────────────────────────
 
@@ -237,6 +242,40 @@ export default function ContiguousTab() {
         >
           Random workload
         </button>
+        <button
+          onClick={handleCompact}
+          className="flex-1 text-xs py-1.5 border border-purple-200 rounded-md bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors"
+        >
+          Compact (gom cụm)
+        </button>
+      </div>
+
+      {/* Trade-offs Analysis */}
+      <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm text-blue-800">
+        <h3 className="font-semibold mb-1 flex items-center gap-1">
+          📊 Evaluate Performance &amp; Trade-offs
+        </h3>
+        <ul className="list-disc list-inside space-y-1 text-xs">
+          <li>
+            <strong>Ưu điểm Contiguous Allocation:</strong> Đơn giản nhất — chỉ cần duy trì danh sách block trống. Truy cập nhanh vì process nằm liên tiếp trong RAM, không cần bảng ánh xạ. Không có internal fragmentation vì cấp phát đúng kích thước.
+          </li>
+          <li>
+            <strong>Trade-off giữa các chiến lược ({state.strategy}):</strong>
+            <br />
+            <strong>First Fit</strong> — nhanh nhất, nhưng tạo hole rải rác ở đầu memory.
+            <br />
+            <strong>Best Fit</strong> — tìm block vừa vặn nhất, nhưng sinh nhiều hole rất nhỏ (không dùng được).
+            <br />
+            <strong>Worst Fit</strong> — ý tưởng tận dụng không gian tốt, nhưng thực tế fragmentation cao nhất.
+            <br />
+            <span className="text-blue-600 italic">
+              Thử nghiệm: Chạy "Demo fragmentation" với từng chiến lược để thấy sự khác biệt về external fragmentation.
+            </span>
+          </li>
+          <li>
+            <strong>Nhược điểm chính:</strong> External fragmentation cao — sau khi free, các hole rải rác không dùng được cho process lớn. Compaction (gom cụm) giúp giảm nhưng tốn thời gian di chuyển dữ liệu.
+          </li>
+        </ul>
       </div>
 
       {/* Event log */}
@@ -252,6 +291,7 @@ export default function ContiguousTab() {
                 className={`text-xs px-2.5 py-1.5 rounded-md ${
                   e.type === "allocate" ? "bg-green-50 text-green-700" :
                   e.type === "free"     ? "bg-gray-100 text-gray-500" :
+                  e.type === "compact"  ? "bg-purple-50 text-purple-700" :
                                           "bg-red-50 text-red-600"
                 }`}
               >
@@ -259,6 +299,8 @@ export default function ContiguousTab() {
                   `✓ Cấp phát ${e.size} KB cho ${e.processName} tại addr ${e.blockStart} KB (${e.strategy})`}
                 {e.type === "free" &&
                   `○ Giải phóng ${e.processName} — ${e.size} KB trả về`}
+                {e.type === "compact" &&
+                  `⟳ ${e.reason}`}
                 {e.type === "fail" &&
                   `✕ ${e.reason}`}
               </div>

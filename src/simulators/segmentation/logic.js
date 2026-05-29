@@ -18,10 +18,18 @@ function getFreeBlocks(blocks) {
   return blocks.filter((b) => !b.processId);
 }
 
-// Tìm free block đủ lớn (First Fit) để đặt segment
-function findFreeBlock(blocks, size) {
-  const free = getFreeBlocks(blocks).sort((a, b) => a.start - b.start);
-  return free.find((b) => b.size >= size) || null;
+function pickBlock(freeBlocks, size, strategy) {
+  const candidates = freeBlocks.filter((b) => b.size >= size);
+  if (!candidates.length) return null;
+
+  if (strategy === "first-fit")
+    return candidates.reduce((a, b) => (a.start < b.start ? a : b));
+  if (strategy === "best-fit")
+    return candidates.reduce((a, b) => (a.size < b.size ? a : b));
+  if (strategy === "worst-fit")
+    return candidates.reduce((a, b) => (a.size > b.size ? a : b));
+
+  return null;
 }
 
 function mergeAdjacentFree(blocks) {
@@ -40,10 +48,11 @@ function mergeAdjacentFree(blocks) {
 
 // ─── Core ────────────────────────────────────────────────────
 
-export function createInitialState(totalMemory = 128) {
+export function createInitialState(totalMemory = 128, strategy = "first-fit") {
   resetColor();
   return {
     totalMemory,
+    strategy,
     blocks: [{ id: uid(), start: 0, size: totalMemory, processId: null, segmentName: null, color: null }],
     processes: [],   // { id, name, color, segments: [{segId, name, size, base}] }
     events: [],
@@ -58,7 +67,8 @@ export function allocate(state, processName, segments) {
   let newBlocks = [...state.blocks];
 
   for (const seg of segments) {
-    const chosen = findFreeBlock(newBlocks, seg.size);
+    const free = getFreeBlocks(newBlocks);
+    const chosen = pickBlock(free, seg.size, state.strategy);
     if (!chosen) {
       // Rollback — giải phóng hết những segment đã cấp phát trong lần này
       newBlocks = state.blocks;
