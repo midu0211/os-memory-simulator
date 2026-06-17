@@ -10,11 +10,18 @@ const COLORS = [
 ];
 
 export const DEFAULT_PAGE_SIZE = 4;
+export const DEFAULT_REPLACEMENT_POLICY = "fifo";
 
 export const VM_STRATEGIES = [
   { value: "paging", label: "Paging" },
   { value: "segmentation", label: "Segmentation" },
   { value: "segmented-paging", label: "Segmentation + Paging" },
+];
+
+export const REPLACEMENT_POLICIES = [
+  { value: "fifo", label: "FIFO" },
+  { value: "opt", label: "OPT" },
+  { value: "lru", label: "LRU" },
 ];
 
 let _colorIdx = 0;
@@ -35,6 +42,12 @@ function uid() {
 
 function isPaged(strategy) {
   return strategy === "paging" || strategy === "segmented-paging";
+}
+
+function normalizeReplacementPolicy(policy) {
+  return REPLACEMENT_POLICIES.some((p) => p.value === policy)
+    ? policy
+    : DEFAULT_REPLACEMENT_POLICY;
 }
 
 function getFreeBlocks(blocks) {
@@ -163,10 +176,105 @@ function getItemLabel(item) {
   return `${item.processName}:${item.segmentName}`;
 }
 
+function cloneForAccess(state) {
+  return {
+    ...state,
+    blocks: state.blocks.map((b) => ({ ...b })),
+    virtualItems: state.virtualItems.map((i) => ({ ...i })),
+    fifoQueue: [...state.fifoQueue],
+    events: [...state.events],
+    replacementPolicy: normalizeReplacementPolicy(state.replacementPolicy),
+    accessClock: state.accessClock ?? 0,
+  };
+}
+
+function getRamItems(state) {
+  return state.virtualItems.filter((item) => item.location === "ram");
+}
+
+function getOldestLoadedItem(ramItems) {
+  return [...ramItems].sort(
+    (a, b) => (a.loadedAt ?? 0) - (b.loadedAt ?? 0)
+  )[0];
+}
+
+function selectFifoVictim(state, ramItems) {
+  const victimId = state.fifoQueue.find((id) =>
+    ramItems.some((item) => item.id === id)
+  );
+
+  return victimId ?? getOldestLoadedItem(ramItems)?.id ?? null;
+}
+
+function selectLruVictim(ramItems) {
+  return (
+    [...ramItems].sort((a, b) => {
+      const aTime = a.lastAccessedAt ?? a.loadedAt ?? 0;
+      const bTime = b.lastAccessedAt ?? b.loadedAt ?? 0;
+
+      if (aTime !== bTime) return aTime - bTime;
+      return (a.loadedAt ?? 0) - (b.loadedAt ?? 0);
+    })[0]?.id ?? null
+  );
+}
+
+function selectOptVictim(ramItems, futureItemIds) {
+  let victim = null;
+  let farthestNextUse = -1;
+
+  for (const item of ramItems) {
+    const nextUse = futureItemIds.indexOf(item.id);
+
+    if (nextUse === -1) {
+      return item.id;
+    }
+
+    if (nextUse > farthestNextUse) {
+      farthestNextUse = nextUse;
+      victim = item;
+    }
+  }
+
+  return victim?.id ?? null;
+}
+
+function selectVictimItemId(state, futureItemIds = []) {
+  const ramItems = getRamItems(state);
+  if (ramItems.length === 0) return null;
+
+  const policy = normalizeReplacementPolicy(state.replacementPolicy);
+
+  if (policy === "opt") {
+    return selectOptVictim(ramItems, futureItemIds);
+  }
+
+  if (policy === "lru") {
+    return selectLruVictim(ramItems);
+  }
+
+  return selectFifoVictim(state, ramItems);
+}
+
+function createBaseItem(processId, processName, color) {
+  return {
+    id: uid(),
+    processId,
+    processName,
+    color,
+    location: "ssd",
+    loadedAt: null,
+    lastAccessedAt: null,
+    frameId: null,
+    frameIndex: null,
+    ramStart: null,
+  };
+}
+
 export function createInitialState(
   totalMemory = 64,
   strategy = "paging",
-  pageSize = DEFAULT_PAGE_SIZE
+  pageSize = DEFAULT_PAGE_SIZE,
+  replacementPolicy = DEFAULT_REPLACEMENT_POLICY
 ) {
   resetColor();
 
@@ -174,20 +282,17 @@ export function createInitialState(
     totalMemory,
     pageSize,
     strategy,
+    replacementPolicy: normalizeReplacementPolicy(replacementPolicy),
 
-    // Physical RAM
     blocks: isPaged(strategy)
       ? createFrames(totalMemory, pageSize)
       : [makeFreeBlock(0, totalMemory)],
 
-    // Virtual memory items.
-    // location = "ssd" nghĩa là đang nằm ở external storage/page file.
-    // location = "ram" nghĩa là đã được nạp vào RAM.
     virtualItems: [],
-
     processes: [],
     fifoQueue: [],
     pageFaults: 0,
+    accessClock: 0,
     events: [],
   };
 }
@@ -200,22 +305,12 @@ function createPagingItems(processId, processName, size, color, pageSize) {
     const remaining = size - pageIndex * pageSize;
 
     items.push({
-      id: uid(),
+      ...createBaseItem(processId, processName, color),
       kind: "page",
-      processId,
-      processName,
-      color,
-
       pageIndex,
       size: pageSize,
       usedSize: Math.min(pageSize, remaining),
-
       virtualStart: pageIndex * pageSize,
-      location: "ssd",
-
-      frameId: null,
-      frameIndex: null,
-      ramStart: null,
     });
   }
 
@@ -227,22 +322,13 @@ function createSegmentationItems(processId, processName, size, color) {
 
   return splitIntoSegments(size).map((seg, segmentIndex) => {
     const item = {
-      id: uid(),
+      ...createBaseItem(processId, processName, color),
       kind: "segment",
-      processId,
-      processName,
-      color,
-
       segmentName: seg.name,
       segmentIndex,
-
       size: seg.size,
       usedSize: seg.size,
-
       virtualStart: cursor,
-      location: "ssd",
-
-      ramStart: null,
     };
 
     cursor += seg.size;
@@ -272,25 +358,14 @@ function createSegmentedPagingItems(
       const remaining = seg.size - segmentPageIndex * pageSize;
 
       items.push({
-        id: uid(),
+        ...createBaseItem(processId, processName, color),
         kind: "segment-page",
-        processId,
-        processName,
-        color,
-
         segmentName: seg.name,
         segmentIndex,
         segmentPageIndex,
-
         size: pageSize,
         usedSize: Math.min(pageSize, remaining),
-
         virtualStart: virtualCursor + segmentPageIndex * pageSize,
-        location: "ssd",
-
-        frameId: null,
-        frameIndex: null,
-        ramStart: null,
       });
     }
 
@@ -305,7 +380,6 @@ export function allocate(state, processName, size) {
 
   const processId = uid();
   const color = nextColor();
-
   let items = [];
 
   if (state.strategy === "paging") {
@@ -342,6 +416,7 @@ export function allocate(state, processName, size) {
 
   return {
     ...state,
+    replacementPolicy: normalizeReplacementPolicy(state.replacementPolicy),
     processes: [...state.processes, newProcess],
     virtualItems: [...state.virtualItems, ...items],
     events: [
@@ -352,21 +427,18 @@ export function allocate(state, processName, size) {
         processName,
         size,
         strategy: state.strategy,
-        detail: `Tạo virtual address space cho ${processName}. Ban đầu các page/segment nằm trong SSD/Page File.`,
+        detail: `Created virtual address space for ${processName}. New pages or segments start in the SSD/Page File.`,
         timestamp: Date.now(),
       },
     ],
   };
 }
 
-function accessPagedItem(state, itemId) {
-  const next = {
-    ...state,
-    blocks: state.blocks.map((b) => ({ ...b })),
-    virtualItems: state.virtualItems.map((i) => ({ ...i })),
-    fifoQueue: [...state.fifoQueue],
-    events: [...state.events],
-  };
+function accessPagedItem(state, itemId, options = {}) {
+  const next = cloneForAccess(state);
+  const futureItemIds = options.futureItemIds ?? [];
+
+  next.accessClock += 1;
 
   const itemIndex = next.virtualItems.findIndex((item) => item.id === itemId);
   if (itemIndex === -1) return state;
@@ -374,11 +446,16 @@ function accessPagedItem(state, itemId) {
   const item = next.virtualItems[itemIndex];
 
   if (item.location === "ram") {
+    next.virtualItems[itemIndex] = {
+      ...item,
+      lastAccessedAt: next.accessClock,
+    };
+
     pushEvent(next, {
       type: "hit",
       processId: item.processId,
       processName: item.processName,
-      detail: `${getItemLabel(item)} đã nằm trong RAM, không có page fault.`,
+      detail: `${getItemLabel(item)} is already in RAM. Page hit, no page fault.`,
     });
 
     return next;
@@ -390,23 +467,20 @@ function accessPagedItem(state, itemId) {
     type: "page-fault",
     processId: item.processId,
     processName: item.processName,
-    detail: `Page fault: ${getItemLabel(item)} đang ở SSD/Page File, cần nạp vào RAM.`,
+    detail: `Page fault: ${getItemLabel(item)} is in the SSD/Page File and must be loaded into RAM.`,
   });
 
   let frameIndex = next.blocks.findIndex((block) => !block.processId);
 
   if (frameIndex === -1) {
-    const victimItemId = next.fifoQueue.find((id) => {
-      const victim = next.virtualItems.find((x) => x.id === id);
-      return victim && victim.location === "ram";
-    });
+    const victimItemId = selectVictimItemId(next, futureItemIds);
 
     if (!victimItemId) {
       pushEvent(next, {
         type: "fail",
         processId: item.processId,
         processName: item.processName,
-        detail: "Không có frame trống và không tìm được page để swap out.",
+        detail: "No free frame is available and no replacement victim could be selected.",
       });
 
       return next;
@@ -417,25 +491,36 @@ function accessPagedItem(state, itemId) {
     );
     const victim = next.virtualItems[victimIndex];
 
-    frameIndex = next.blocks.findIndex((block) => block.id === victim.frameId);
+    frameIndex = next.blocks.findIndex((block) => block.itemId === victim.id);
+
+    if (frameIndex === -1) {
+      pushEvent(next, {
+        type: "fail",
+        processId: item.processId,
+        processName: item.processName,
+        detail: `Could not find the RAM frame that contains ${getItemLabel(victim)}.`,
+      });
+
+      return next;
+    }
 
     next.blocks[frameIndex] = resetBlock(next.blocks[frameIndex]);
-
     next.virtualItems[victimIndex] = {
       ...victim,
       location: "ssd",
       frameId: null,
       frameIndex: null,
       ramStart: null,
+      loadedAt: null,
+      lastAccessedAt: null,
     };
-
     next.fifoQueue = next.fifoQueue.filter((id) => id !== victimItemId);
 
     pushEvent(next, {
       type: "swap-out",
       processId: victim.processId,
       processName: victim.processName,
-      detail: `Swap out ${getItemLabel(victim)} từ RAM về SSD/Page File.`,
+      detail: `Swap out ${getItemLabel(victim)} from RAM to the SSD/Page File using ${next.replacementPolicy.toUpperCase()}.`,
     });
   }
 
@@ -455,28 +540,28 @@ function accessPagedItem(state, itemId) {
     frameId: frame.id,
     frameIndex: frame.frameIndex,
     ramStart: frame.start,
+    loadedAt: next.accessClock,
+    lastAccessedAt: next.accessClock,
   };
 
+  next.fifoQueue = next.fifoQueue.filter((id) => id !== item.id);
   next.fifoQueue.push(item.id);
 
   pushEvent(next, {
     type: "swap-in",
     processId: item.processId,
     processName: item.processName,
-    detail: `Swap in ${getItemLabel(item)} từ SSD/Page File vào Frame ${frame.frameIndex}.`,
+    detail: `Swap in ${getItemLabel(item)} from the SSD/Page File to Frame ${frame.frameIndex}.`,
   });
 
   return next;
 }
 
-function accessSegmentItem(state, itemId) {
-  const next = {
-    ...state,
-    blocks: state.blocks.map((b) => ({ ...b })),
-    virtualItems: state.virtualItems.map((i) => ({ ...i })),
-    fifoQueue: [...state.fifoQueue],
-    events: [...state.events],
-  };
+function accessSegmentItem(state, itemId, options = {}) {
+  const next = cloneForAccess(state);
+  const futureItemIds = options.futureItemIds ?? [];
+
+  next.accessClock += 1;
 
   const itemIndex = next.virtualItems.findIndex((item) => item.id === itemId);
   if (itemIndex === -1) return state;
@@ -484,11 +569,16 @@ function accessSegmentItem(state, itemId) {
   const item = next.virtualItems[itemIndex];
 
   if (item.location === "ram") {
+    next.virtualItems[itemIndex] = {
+      ...item,
+      lastAccessedAt: next.accessClock,
+    };
+
     pushEvent(next, {
       type: "hit",
       processId: item.processId,
       processName: item.processName,
-      detail: `${getItemLabel(item)} đã nằm trong RAM.`,
+      detail: `${getItemLabel(item)} is already in RAM.`,
     });
 
     return next;
@@ -500,7 +590,7 @@ function accessSegmentItem(state, itemId) {
     type: "page-fault",
     processId: item.processId,
     processName: item.processName,
-    detail: `Segment fault: ${getItemLabel(item)} đang ở SSD/Page File, cần nạp vào RAM.`,
+    detail: `Segment fault: ${getItemLabel(item)} is in the SSD/Page File and must be loaded into RAM.`,
   });
 
   let blockIndex = next.blocks.findIndex(
@@ -508,10 +598,7 @@ function accessSegmentItem(state, itemId) {
   );
 
   while (blockIndex === -1) {
-    const victimItemId = next.fifoQueue.find((id) => {
-      const victim = next.virtualItems.find((x) => x.id === id);
-      return victim && victim.location === "ram";
-    });
+    const victimItemId = selectVictimItemId(next, futureItemIds);
 
     if (!victimItemId) break;
 
@@ -519,29 +606,38 @@ function accessSegmentItem(state, itemId) {
       (x) => x.id === victimItemId
     );
     const victim = next.virtualItems[victimIndex];
-
     const victimBlockIndex = next.blocks.findIndex(
-      (b) => b.itemId === victim.id
+      (block) => block.itemId === victim.id
     );
 
-    if (victimBlockIndex !== -1) {
-      next.blocks[victimBlockIndex] = resetBlock(next.blocks[victimBlockIndex]);
-      next.blocks = mergeAdjacentFree(next.blocks);
+    if (victimBlockIndex === -1) {
+      next.fifoQueue = next.fifoQueue.filter((id) => id !== victimItemId);
+      next.virtualItems[victimIndex] = {
+        ...victim,
+        location: "ssd",
+        ramStart: null,
+        loadedAt: null,
+        lastAccessedAt: null,
+      };
+      continue;
     }
 
+    next.blocks[victimBlockIndex] = resetBlock(next.blocks[victimBlockIndex]);
+    next.blocks = mergeAdjacentFree(next.blocks);
     next.virtualItems[victimIndex] = {
       ...victim,
       location: "ssd",
       ramStart: null,
+      loadedAt: null,
+      lastAccessedAt: null,
     };
-
     next.fifoQueue = next.fifoQueue.filter((id) => id !== victimItemId);
 
     pushEvent(next, {
       type: "swap-out",
       processId: victim.processId,
       processName: victim.processName,
-      detail: `Swap out ${getItemLabel(victim)} từ RAM về SSD/Page File.`,
+      detail: `Swap out ${getItemLabel(victim)} from RAM to the SSD/Page File using ${next.replacementPolicy.toUpperCase()}.`,
     });
 
     blockIndex = next.blocks.findIndex(
@@ -554,7 +650,7 @@ function accessSegmentItem(state, itemId) {
       type: "fail",
       processId: item.processId,
       processName: item.processName,
-      detail: `Không có block liên tục đủ ${item.size} KB để nạp ${getItemLabel(item)}.`,
+      detail: `No contiguous RAM block is large enough to load ${getItemLabel(item)} (${item.size} KB).`,
     });
 
     return next;
@@ -586,26 +682,41 @@ function accessSegmentItem(state, itemId) {
     ...item,
     location: "ram",
     ramStart: allocated.start,
+    loadedAt: next.accessClock,
+    lastAccessedAt: next.accessClock,
   };
 
+  next.fifoQueue = next.fifoQueue.filter((id) => id !== item.id);
   next.fifoQueue.push(item.id);
 
   pushEvent(next, {
     type: "swap-in",
     processId: item.processId,
     processName: item.processName,
-    detail: `Swap in ${getItemLabel(item)} từ SSD/Page File vào RAM tại ${allocated.start} KB.`,
+    detail: `Swap in ${getItemLabel(item)} from the SSD/Page File to RAM at ${allocated.start} KB.`,
   });
 
   return next;
 }
 
-export function accessItem(state, itemId) {
+export function accessItem(state, itemId, options = {}) {
   if (isPaged(state.strategy)) {
-    return accessPagedItem(state, itemId);
+    return accessPagedItem(state, itemId, options);
   }
 
-  return accessSegmentItem(state, itemId);
+  return accessSegmentItem(state, itemId, options);
+}
+
+export function runReferenceString(state, itemIds) {
+  let next = state;
+
+  itemIds.forEach((itemId, index) => {
+    next = accessItem(next, itemId, {
+      futureItemIds: itemIds.slice(index + 1),
+    });
+  });
+
+  return next;
 }
 
 export function accessProcess(state, processId) {
@@ -638,17 +749,19 @@ export function freeProcess(state, processId) {
     newBlocks = mergeAdjacentFree(newBlocks);
   }
 
+  const remainingItems = state.virtualItems.filter(
+    (item) => item.processId !== processId
+  );
+  const remainingItemIds = new Set(remainingItems.map((item) => item.id));
+
   return {
     ...state,
     blocks: newBlocks.sort((a, b) => a.start - b.start),
     processes: state.processes.filter((p) => p.id !== processId),
-    virtualItems: state.virtualItems.filter(
-      (item) => item.processId !== processId
+    virtualItems: remainingItems,
+    fifoQueue: state.fifoQueue.filter((itemId) =>
+      remainingItemIds.has(itemId)
     ),
-    fifoQueue: state.fifoQueue.filter((itemId) => {
-      const item = state.virtualItems.find((x) => x.id === itemId);
-      return item && item.processId !== processId;
-    }),
     events: [
       ...state.events,
       {
@@ -657,7 +770,7 @@ export function freeProcess(state, processId) {
         processName: process.name,
         size: process.size,
         strategy: state.strategy,
-        detail: `Giải phóng ${process.name} khỏi virtual memory, RAM và SSD/Page File.`,
+        detail: `Released ${process.name} from virtual memory, RAM, and the SSD/Page File.`,
         timestamp: Date.now(),
       },
     ],
@@ -676,9 +789,7 @@ export function getMetrics(state) {
     .reduce((sum, item) => sum + item.usedSize, 0);
 
   const freeRam = state.totalMemory - ramUsed;
-
   const freeBlocks = getFreeBlocks(state.blocks);
-
   const largestFreeBlock = freeBlocks.reduce(
     (max, block) => Math.max(max, block.size),
     0
@@ -701,35 +812,37 @@ export function getMetrics(state) {
 
   return {
     totalMemory: state.totalMemory,
-
     ramUsed,
     usedMemory: ramUsed,
-
     logicalUsed,
     freeMemory: freeRam,
     ssdUsed,
-
     externalFragmentation,
     internalFragmentation,
     internalWaste,
-
     InSSD: externalFragmentation,
-
     pageFaults: state.pageFaults,
     numPageFaults: state.pageFaults,
-
     numProcesses: state.processes.length,
     numFreeBlocks: freeBlocks.length,
     largestFreeBlock,
-
     numVirtualItems: state.virtualItems.length,
     numSsdItems: state.virtualItems.filter((item) => item.location === "ssd")
       .length,
   };
 }
 
-export function runFragmentationDemo(totalMemory = 64, strategy = "paging") {
-  let s = createInitialState(totalMemory, strategy);
+export function runFragmentationDemo(
+  totalMemory = 64,
+  strategy = "paging",
+  replacementPolicy = DEFAULT_REPLACEMENT_POLICY
+) {
+  let s = createInitialState(
+    totalMemory,
+    strategy,
+    DEFAULT_PAGE_SIZE,
+    replacementPolicy
+  );
 
   for (const [name, size] of [
     ["P1", 8],
@@ -753,8 +866,17 @@ export function runFragmentationDemo(totalMemory = 64, strategy = "paging") {
   return s;
 }
 
-export function runRandomWorkload(totalMemory = 64, strategy = "paging") {
-  let s = createInitialState(totalMemory, strategy);
+export function runRandomWorkload(
+  totalMemory = 64,
+  strategy = "paging",
+  replacementPolicy = DEFAULT_REPLACEMENT_POLICY
+) {
+  let s = createInitialState(
+    totalMemory,
+    strategy,
+    DEFAULT_PAGE_SIZE,
+    replacementPolicy
+  );
 
   for (const [name, size] of [
     ["Chrome", 14],
