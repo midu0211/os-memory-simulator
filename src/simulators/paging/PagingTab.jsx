@@ -1,5 +1,4 @@
 // simulators/paging/PagingTab.jsx
-// TODO: thành viên phụ trách điền vào
 // src/simulators/paging/PagingTab.jsx
 import { useState, useCallback, useEffect } from "react";
 import {
@@ -56,7 +55,7 @@ export default function PagingTab() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-sm font-medium text-gray-800">Paging</h2>
-          <p className="text-xs text-gray-400">Phạm Đặng Tấn Dũng · Non-contiguous memory</p>
+          <p className="text-xs text-gray-400">Non-contiguous memory allocation</p>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-500">Page Size:</span>
@@ -75,10 +74,10 @@ export default function PagingTab() {
       {/* Metric cards */}
       <div className="grid grid-cols-4 gap-2">
         {[
-          { label: "Tổng Physical Mem", value: `${metrics.totalMemory} KB` },
-          { label: "Số lượng Frames", value: `${state.frames.length} frames` },
+          { label: "Total Physical Memory", value: `${metrics.totalMemory} KB` },
+          { label: "Number of Frames", value: `${state.frames.length} frames` },
           { label: "Internal Fragmentation", value: `${metrics.totalInternalFrag} KB`, highlight: metrics.totalInternalFrag > 0 },
-          { label: "Tổng Pages (Page Table)", value: `${metrics.totalPages} entries`, highlight: metrics.totalPages > 15 },
+          { label: "Page Table Entries", value: `${metrics.totalPages} entries`, highlight: metrics.totalPages > 15 },
         ].map((m) => (
           <div key={m.label} className="bg-gray-50 rounded-lg p-3">
             <div className="text-xs text-gray-400 mb-0.5">{m.label}</div>
@@ -89,24 +88,7 @@ export default function PagingTab() {
         ))}
       </div>
 
-      {/* Đánh giá Trade-offs Analysis */}
-      <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm text-blue-800">
-        <h3 className="font-semibold mb-1 flex items-center gap-1">
-          📊 Evaluate Performance & Trade-offs
-        </h3>
-        <ul className="list-disc list-inside space-y-1 text-xs">
-          <li>
-            <strong>Ưu điểm Paging (Zero External Frag):</strong> Paging chia bộ nhớ thành các frame bằng nhau. Như bạn thấy, quá trình cấp phát không cần khoảng trống liên tục. Bất kỳ frame trống nào cũng dùng được $\rightarrow$ Tránh hoàn toàn phân mảnh ngoại (External Fragmentation).
-          </li>
-          <li>
-            <strong>Trade-off Page Size ({state.pageSize} KB):</strong> Hiện tại, đang lãng phí <strong>{metrics.totalInternalFrag} KB</strong> phân mảnh nội (Internal Fragmentation) và sinh ra <strong>{metrics.totalPages} entries</strong> trong Page Table.
-            <br />
-            <span className="text-blue-600 italic">
-              Thử nghiệm: Nếu bạn đổi Page Size sang 2KB, lượng lãng phí nội sẽ giảm mạnh, nhưng Page Table Entries sẽ tăng vọt (tốn bộ nhớ lưu bảng phân trang). Ngược lại, nếu chọn 8KB, Page Table sẽ rất nhỏ gọn nhưng lãng phí bộ nhớ trên mỗi tiến trình sẽ rất cao.
-            </span>
-          </li>
-        </ul>
-      </div>
+
 
       {/* Memory visual */}
       <div>
@@ -123,7 +105,7 @@ export default function PagingTab() {
                 key={frame.id}
                 title={
                   isFree
-                    ? `Frame ${i} · Trống`
+                    ? `Frame ${i} · Free`
                     : `Frame ${i} · ${frame.processName} (Page ${frame.pageNumber})`
                 }
                 style={{
@@ -148,11 +130,11 @@ export default function PagingTab() {
 
       {/* Controls & Page Table */}
       <div className="grid grid-cols-2 gap-3">
-        {/* Panel Cấp phát */}
+        {/* Allocate panel */}
         <div className="bg-gray-50 rounded-lg p-3 space-y-2.5 border border-gray-100">
-          <p className="text-xs font-medium text-gray-700">Cấp phát (Paging)</p>
+          <p className="text-xs font-medium text-gray-700">Allocate new process</p>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400 w-16 shrink-0">Tiến trình</span>
+            <span className="text-xs text-gray-400 w-16 shrink-0">Process name</span>
             <input
               type="text"
               value={processName}
@@ -161,7 +143,7 @@ export default function PagingTab() {
             />
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400 w-16 shrink-0">Kích thước</span>
+            <span className="text-xs text-gray-400 w-16 shrink-0">Size</span>
             <input
               type="range" min={1} max={30} step={1} value={processSize}
               onChange={(e) => setProcessSize(Number(e.target.value))}
@@ -172,15 +154,15 @@ export default function PagingTab() {
             </span>
           </div>
           <div className="text-[10px] text-gray-500 bg-white p-1.5 rounded border border-gray-100">
-            Dự kiến cần: <b>{Math.ceil(processSize / state.pageSize)} pages</b> 
-            (Lãng phí: <b>{(Math.ceil(processSize / state.pageSize) * state.pageSize) - processSize} KB</b>)
+            Estimated: <b>{Math.ceil(processSize / state.pageSize)} pages</b> 
+            (Internal waste: <b>{(Math.ceil(processSize / state.pageSize) * state.pageSize) - processSize} KB</b>)
           </div>
           <div className="flex gap-2 pt-1">
             <button onClick={handleAllocate} className="flex-1 text-xs py-1.5 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors">
               Allocate Process
             </button>
             <button onClick={handleDemo} className="flex-1 text-xs py-1.5 border border-gray-200 rounded-md bg-white hover:bg-gray-50 transition-colors">
-              Chạy Demo
+              Run Demo
             </button>
             <button onClick={handleReset} className="text-xs py-1.5 px-3 border border-gray-200 rounded-md bg-white hover:bg-gray-50 transition-colors">
               Reset
@@ -193,7 +175,7 @@ export default function PagingTab() {
           <p className="text-xs font-medium text-gray-700 mb-2">Process Page Tables</p>
           <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
             {state.processes.length === 0 ? (
-              <p className="text-xs text-gray-400 py-4 text-center border border-dashed border-gray-200 rounded">Không có tiến trình</p>
+              <p className="text-xs text-gray-400 py-4 text-center border border-dashed border-gray-200 rounded">No processes running</p>
             ) : (
               state.processes.map((p) => (
                 <div key={p.id} className="bg-white rounded border border-gray-200 overflow-hidden">

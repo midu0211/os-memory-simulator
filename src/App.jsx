@@ -1,21 +1,17 @@
 // App.jsx
 import { useState } from "react";
-import ContiguousTab    from "./simulators/contiguous/ContiguousTab";
 import PagingTab        from "./simulators/paging/PagingTab";
 import SegmentationTab  from "./simulators/segmentation/SegmentationTab";
 import VirtualMemoryTab from "./simulators/virtualMemory/VirtualMemoryTab";
-import CompareTab       from "./compare/CompareTab";
 
 const TABS = [
-  { id: "contiguous", label: "Contiguous",     component: ContiguousTab },
   { id: "paging",     label: "Paging",         component: PagingTab },
   { id: "seg",        label: "Segmentation",   component: SegmentationTab },
   { id: "vm",         label: "Virtual Memory", component: VirtualMemoryTab },
-  { id: "compare",    label: "Compare",        component: CompareTab },
 ];
 
 export default function App() {
-  const [active, setActive] = useState("contiguous");
+  const [active, setActive] = useState("paging");
   const ActiveComponent = TABS.find((t) => t.id === active)?.component;
 
   return (
@@ -27,7 +23,7 @@ export default function App() {
           <h1 className="text-xl font-medium text-gray-800">
             Memory Management Simulator
           </h1>
-          <p className="text-sm text-gray-400">Operating Systems · Nhóm X</p>
+          <p className="text-sm text-gray-400">Operating Systems · Group X</p>
         </div>
 
         {/* Tab bar */}

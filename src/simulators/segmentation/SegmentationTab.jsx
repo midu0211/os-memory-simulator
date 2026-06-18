@@ -73,7 +73,7 @@ export default function SegmentationTab() {
 
   const handleTranslate = useCallback(() => {
     const proc = state.processes.find((p) => p.id === addrProc);
-    if (!proc) { setAddrResult({ error: "Chưa chọn process" }); return; }
+    if (!proc) { setAddrResult({ error: "No process selected" }); return; }
     setAddrResult(translateAddress(proc, addrSeg, Number(addrOffset)));
   }, [state.processes, addrProc, addrSeg, addrOffset]);
 
@@ -88,7 +88,7 @@ export default function SegmentationTab() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-sm font-medium text-gray-800">Segmentation</h2>
-          <p className="text-xs text-gray-400">Mỗi process gồm nhiều segment (code / data / heap / stack)</p>
+          <p className="text-xs text-gray-400">Each process consists of multiple segments (code / data / heap / stack)</p>
         </div>
         <select
           value={state.strategy}
@@ -104,9 +104,9 @@ export default function SegmentationTab() {
       {/* Metrics */}
       <div className="grid grid-cols-4 gap-2">
         {[
-          { label: "Tổng",      value: `${metrics.totalMemory} KB` },
-          { label: "Đã dùng",   value: `${metrics.usedMemory} KB` },
-          { label: "Còn trống", value: `${metrics.freeMemory} KB` },
+          { label: "Total",      value: `${metrics.totalMemory} KB` },
+          { label: "Used",   value: `${metrics.usedMemory} KB` },
+          { label: "Free", value: `${metrics.freeMemory} KB` },
           { label: "Ext. frag", value: `${metrics.fragmentationPercent}%`,
             warn: metrics.fragmentationPercent > 30 },
         ].map((m) => (
@@ -140,7 +140,7 @@ export default function SegmentationTab() {
       {/* Physical memory visual */}
       <div>
         <p className="text-xs text-gray-400 mb-1.5">
-          Physical memory — {state.totalMemory} KB · click segment để free process
+          Physical memory — {state.totalMemory} KB · click a segment to free the process
         </p>
         <div className="bg-gray-50 rounded-lg p-2 flex flex-wrap gap-1 min-h-12">
           {state.blocks.map((block) => {
@@ -153,7 +153,7 @@ export default function SegmentationTab() {
                 title={
                   isFree
                     ? `Free · ${block.size} KB @ ${block.start}`
-                    : `${block.segmentName} (${block.size} KB) @ ${block.start} — click để free`
+                    : `${block.segmentName} (${block.size} KB) @ ${block.start} — click to free`
                 }
                 style={{
                   width: `calc(${pct}% - 4px)`,
@@ -176,10 +176,10 @@ export default function SegmentationTab() {
 
         {/* Allocate panel */}
         <div className="bg-gray-50 rounded-lg p-3 space-y-2">
-          <p className="text-xs font-medium text-gray-700">Cấp phát process mới</p>
+          <p className="text-xs font-medium text-gray-700">Allocate new process</p>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400 w-14 shrink-0">Tên</span>
+            <span className="text-xs text-gray-400 w-14 shrink-0">Name</span>
             <input
               type="text" value={processName}
               onChange={(e) => setProcessName(e.target.value)}
@@ -191,7 +191,7 @@ export default function SegmentationTab() {
           <div className="space-y-1">
             <div className="flex justify-between items-center">
               <span className="text-xs text-gray-400">Segments</span>
-              <button onClick={addSegment} className="text-xs text-blue-500 hover:text-blue-700">+ Thêm</button>
+              <button onClick={addSegment} className="text-xs text-blue-500 hover:text-blue-700">+ Add</button>
             </div>
             {segments.map((seg, idx) => (
               <div key={idx} className="flex items-center gap-1.5">
@@ -241,10 +241,10 @@ export default function SegmentationTab() {
 
           {/* Process list */}
           <div className="bg-gray-50 rounded-lg p-3">
-            <p className="text-xs font-medium text-gray-700 mb-2">Processes đang chạy</p>
+            <p className="text-xs font-medium text-gray-700 mb-2">Running processes</p>
             <div className="space-y-1.5 max-h-36 overflow-y-auto">
               {state.processes.length === 0 ? (
-                <p className="text-xs text-gray-300 text-center py-2">Chưa có process nào</p>
+                <p className="text-xs text-gray-300 text-center py-2">No processes running</p>
               ) : state.processes.map((p) => (
                 <div key={p.id} className="bg-white rounded border border-gray-100 px-2 py-1.5">
                   <div className="flex items-center gap-2 mb-1">
@@ -277,7 +277,7 @@ export default function SegmentationTab() {
                 <span className="text-xs text-gray-400 w-14 shrink-0">Process</span>
                 <select value={addrProc} onChange={(e) => { setAddrProc(e.target.value); setAddrResult(null); }}
                   className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 bg-white">
-                  <option value="">-- chọn --</option>
+                  <option value="">-- select --</option>
                   {state.processes.map((p) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
@@ -326,26 +326,6 @@ export default function SegmentationTab() {
         </div>
       </div>
 
-      {/* Trade-offs Analysis */}
-      <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm text-blue-800">
-        <h3 className="font-semibold mb-1 flex items-center gap-1">
-          📊 Evaluate Performance &amp; Trade-offs
-        </h3>
-        <ul className="list-disc list-inside space-y-1 text-xs">
-          <li>
-            <strong>Ưu điểm Segmentation:</strong> Phù hợp với cách lập trình viên nhìn process — code, data, heap, stack tách biệt. Không có internal fragmentation vì mỗi segment cấp phát đúng kích thước. Hỗ trợ bảo vệ ở mức segment (ví dụ code segment read-only).
-          </li>
-          <li>
-            <strong>Trade-off chiến lược ({state.strategy}):</strong> Mỗi segment cần vùng liên tục, nên vẫn phải dùng First/Best/Worst Fit giống Contiguous Allocation. Kết quả: vẫn có external fragmentation, nhưng ít hơn vì segment nhỏ hơn toàn bộ process.
-          </li>
-          <li>
-            <strong>So sánh với Contiguous:</strong> Segmentation chia process thành nhiều phần linh hoạt hơn, nhưng phức tạp hơn do cần segment table cho mỗi process.
-          </li>
-          <li>
-            <strong>So sánh với Paging:</strong> Segmentation không có internal frag nhưng có external frag. Paging ngược lại — không có external frag nhưng có internal frag. Segmentation phản ánh cấu trúc logic, Paging thì không.
-          </li>
-        </ul>
-      </div>
 
       {/* Segment table */}
       {state.processes.length > 0 && (
@@ -392,7 +372,7 @@ export default function SegmentationTab() {
         <p className="text-xs font-medium text-gray-700 mb-1.5">Event log</p>
         <div className="space-y-1 max-h-28 overflow-y-auto">
           {state.events.length === 0 ? (
-            <p className="text-xs text-gray-300 text-center py-2">Chưa có sự kiện nào</p>
+            <p className="text-xs text-gray-300 text-center py-2">No events yet</p>
           ) : [...state.events].reverse().map((e, i) => (
             <div key={i} className={`text-xs px-2.5 py-1.5 rounded-md ${
               e.type === "allocate" ? "bg-green-50 text-green-700" :
@@ -400,8 +380,8 @@ export default function SegmentationTab() {
                                       "bg-red-50 text-red-600"
             }`}>
               {e.type === "allocate" &&
-                `✓ Cấp phát ${e.processName} — ${e.segments.map(s => `${s.name}(${s.size}K@${s.base})`).join(", ")}`}
-              {e.type === "free" && `○ Giải phóng ${e.processName}`}
+                `✓ Allocated ${e.processName} — ${e.segments.map(s => `${s.name}(${s.size}K@${s.base})`).join(", ")}`}
+              {e.type === "free" && `○ Freed ${e.processName}`}
               {e.type === "fail"    && `✕ ${e.reason}`}
             </div>
           ))}
