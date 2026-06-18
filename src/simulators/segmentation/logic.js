@@ -71,7 +71,6 @@ export function allocate(state, processName, segments) {
     const chosen = pickBlock(free, seg.size, state.strategy);
     if (!chosen) {
       // Rollback — giải phóng hết những segment đã cấp phát trong lần này
-      newBlocks = state.blocks;
       const event = {
         type: "fail",
         processId: "",

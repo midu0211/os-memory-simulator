@@ -1,6 +1,5 @@
 import { useState, useCallback } from "react";
 import {
-  VM_STRATEGIES,
   REPLACEMENT_POLICIES,
   createInitialState,
   allocate,
@@ -21,24 +20,14 @@ function getBlockItem(state, block) {
 }
 
 function getSsdLabel(item) {
-  if (item.kind === "page") {
-    return `${item.processName}:P${item.pageIndex}`;
-  }
-
-  if (item.kind === "segment-page") {
-    return `${item.processName}:${item.segmentName[0]}P${item.segmentPageIndex}`;
-  }
-
-  return `${item.processName}:${item.segmentName}`;
+  return `${item.processName}:P${item.pageIndex}`;
 }
 
 function getRamLabel(state, block) {
   const item = getBlockItem(state, block);
 
   if (!item) {
-    return state.strategy === "segmentation"
-      ? `${block.size}K`
-      : `F${block.frameIndex}`;
+    return `F${block.frameIndex}`;
   }
 
   return getSsdLabel(item);
@@ -51,27 +40,11 @@ function getRamTitle(state, block) {
     return `Free - ${block.size} KB at ${block.start} KB`;
   }
 
-  if (item.kind === "page") {
-    return `${item.processName} - virtual page ${item.pageIndex} -> frame ${block.frameIndex} - RAM ${block.start} KB`;
-  }
-
-  if (item.kind === "segment-page") {
-    return `${item.processName} - segment ${item.segmentName}, page ${item.segmentPageIndex} -> frame ${block.frameIndex}`;
-  }
-
-  return `${item.processName} - segment ${item.segmentName} - RAM ${block.start} KB`;
+  return `${item.processName} - virtual page ${item.pageIndex} -> frame ${block.frameIndex} - RAM ${block.start} KB`;
 }
 
-function getStrategyNote(strategy) {
-  if (strategy === "paging") {
-    return "Demand paging creates virtual pages in the SSD/Page File and loads a page into a RAM frame only when it is accessed.";
-  }
-
-  if (strategy === "segmentation") {
-    return "Demand segmentation creates virtual segments in the SSD/Page File and loads each segment into one contiguous RAM block.";
-  }
-
-  return "Segmented paging creates segments, divides each segment into pages, and loads segment-pages into RAM frames on demand.";
+function getStrategyNote() {
+  return "Demand paging creates virtual pages in the Swap space / Page file and loads a page into a RAM frame only when it is accessed.";
 }
 
 function getPolicyNote(policy) {
@@ -125,22 +98,6 @@ export default function VirtualMemoryTab() {
   const [sequenceError, setSequenceError] = useState("");
 
   const metrics = getMetrics(state);
-
-  const handleStrategyChange = useCallback((e) => {
-    const strategy = e.target.value;
-
-    setState((current) =>
-      createInitialState(
-        current.totalMemory,
-        strategy,
-        current.pageSize,
-        current.replacementPolicy
-      )
-    );
-    setProcessName("P1");
-    setAccessSequence("");
-    setSequenceError("");
-  }, []);
 
   const handlePolicyChange = useCallback((replacementPolicy) => {
     setState((current) => ({
@@ -265,17 +222,9 @@ export default function VirtualMemoryTab() {
         </div>
 
         <div className="flex flex-col gap-2 sm:items-end">
-          <select
-            value={state.strategy}
-            onChange={handleStrategyChange}
-            className="text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white text-gray-700"
-          >
-            {VM_STRATEGIES.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
+          <div className="text-xs border border-blue-200 rounded-md px-2.5 py-1.5 bg-blue-50 text-blue-700 font-medium">
+            Paging
+          </div>
 
           <div className="inline-flex rounded-md border border-gray-200 bg-white p-0.5">
             {REPLACEMENT_POLICIES.map((policy) => (
@@ -298,7 +247,7 @@ export default function VirtualMemoryTab() {
 
       <div className="grid gap-2 sm:grid-cols-2">
         <div className="text-xs bg-blue-50 text-blue-700 rounded-lg px-3 py-2">
-          {getStrategyNote(state.strategy)}
+          {getStrategyNote()}
         </div>
         <div className="text-xs bg-indigo-50 text-indigo-700 rounded-lg px-3 py-2">
           {getPolicyNote(state.replacementPolicy)}
@@ -309,7 +258,7 @@ export default function VirtualMemoryTab() {
         {[
           { label: "Virtual used", value: `${metrics.logicalUsed} KB` },
           { label: "RAM used", value: `${metrics.ramUsed} KB` },
-          { label: "SSD/Page file", value: `${metrics.ssdUsed} KB` },
+          { label: "Swap used", value: `${metrics.ssdUsed} KB` },
           {
             label: "Page faults",
             value: metrics.pageFaults,
@@ -351,13 +300,13 @@ export default function VirtualMemoryTab() {
 
       <div>
         <p className="text-xs text-gray-400 mb-1.5">
-          Virtual address space - each process owns a private virtual memory area
+          Swap space / Page file - backing store for virtual pages
         </p>
 
         <div className="bg-indigo-50 rounded-lg p-2 flex flex-wrap gap-1 min-h-12">
           {state.virtualItems.length === 0 ? (
             <p className="text-xs text-indigo-300 py-2 px-2">
-              No virtual pages or segments yet
+              No pages in swap space yet
             </p>
           ) : (
             state.virtualItems.map((item) => (
@@ -368,7 +317,7 @@ export default function VirtualMemoryTab() {
                 title={
                   item.location === "ram"
                     ? `${getSsdLabel(item)} is resident in RAM`
-                    : `${getSsdLabel(item)} is in the SSD/Page File`
+                    : `${getSsdLabel(item)} is in the Swap space / Page file`
                 }
                 className={`h-9 rounded px-2 text-[11px] font-medium border transition-colors ${
                   item.location === "ram"
@@ -378,7 +327,7 @@ export default function VirtualMemoryTab() {
               >
                 {getSsdLabel(item)}
                 <span className="ml-1 opacity-60">
-                  {item.location === "ram" ? "RAM" : "SSD"}
+                  {item.location === "ram" ? "RAM" : "Page file"}
                 </span>
               </button>
             ))
@@ -458,7 +407,7 @@ export default function VirtualMemoryTab() {
                 title={getRamTitle(state, block)}
                 style={{
                   width: `calc(${pct}% - 4px)`,
-                  minWidth: state.strategy === "segmentation" ? 28 : 42,
+                  minWidth: 42,
                   background: isFree ? undefined : block.color?.bg,
                   color: isFree ? undefined : block.color?.text,
                 }}
@@ -477,14 +426,14 @@ export default function VirtualMemoryTab() {
 
       <div>
         <p className="text-xs text-gray-400 mb-1.5">
-          External SSD / Page File - items not currently resident in RAM
+          Swap space / Page file - pages not currently resident in RAM
         </p>
 
         <div className="bg-slate-100 rounded-lg p-2 flex flex-wrap gap-1 min-h-12">
           {state.virtualItems.filter((item) => item.location === "ssd")
             .length === 0 ? (
             <p className="text-xs text-slate-400 py-2 px-2">
-              SSD/Page File is empty or all items are already resident in RAM
+              Swap space / Page file is empty or all pages are already resident in RAM
             </p>
           ) : (
             state.virtualItems
@@ -494,7 +443,7 @@ export default function VirtualMemoryTab() {
                   key={item.id}
                   type="button"
                   onClick={() => handleAccessItem(item.id)}
-                  title={`${getSsdLabel(item)} is in the SSD/Page File`}
+                  title={`${getSsdLabel(item)} is in the Swap space / Page file`}
                   style={{
                     borderColor: item.color?.bg,
                     color: item.color?.text,
@@ -653,11 +602,7 @@ export default function VirtualMemoryTab() {
                   {items.map((item) => (
                     <div key={item.id} className="text-gray-500">
                       {getSsdLabel(item)} - Virtual {item.virtualStart} KB -{" "}
-                      {item.location === "ram"
-                        ? state.strategy === "segmentation"
-                          ? `RAM ${item.ramStart} KB`
-                          : `Frame ${item.frameIndex}`
-                        : "SSD/Page File"}
+                      {item.location === "ram" ? `Frame ${item.frameIndex}` : "Page file"}
                     </div>
                   ))}
                 </div>

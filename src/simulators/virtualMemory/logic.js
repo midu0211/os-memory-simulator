@@ -14,8 +14,6 @@ export const DEFAULT_REPLACEMENT_POLICY = "fifo";
 
 export const VM_STRATEGIES = [
   { value: "paging", label: "Paging" },
-  { value: "segmentation", label: "Segmentation" },
-  { value: "segmented-paging", label: "Segmentation + Paging" },
 ];
 
 export const REPLACEMENT_POLICIES = [
@@ -40,8 +38,8 @@ function uid() {
   return Math.random().toString(36).slice(2, 8);
 }
 
-function isPaged(strategy) {
-  return strategy === "paging" || strategy === "segmented-paging";
+function normalizeVmStrategy(strategy) {
+  return VM_STRATEGIES.some((s) => s.value === strategy) ? strategy : "paging";
 }
 
 function normalizeReplacementPolicy(policy) {
@@ -68,19 +66,6 @@ function makeFreeFrame(start, size, frameIndex) {
   };
 }
 
-function makeFreeBlock(start, size) {
-  return {
-    id: uid(),
-    type: "block",
-    start,
-    size,
-    processId: null,
-    processName: null,
-    itemId: null,
-    color: null,
-  };
-}
-
 function createFrames(totalMemory, pageSize) {
   const frames = [];
 
@@ -94,67 +79,7 @@ function createFrames(totalMemory, pageSize) {
 }
 
 function resetBlock(block) {
-  if (block.type === "frame") {
-    return makeFreeFrame(block.start, block.size, block.frameIndex);
-  }
-
-  return makeFreeBlock(block.start, block.size);
-}
-
-function mergeAdjacentFree(blocks) {
-  const sorted = [...blocks].sort((a, b) => a.start - b.start);
-  const merged = [];
-
-  for (const block of sorted) {
-    const prev = merged[merged.length - 1];
-
-    if (
-      prev &&
-      !prev.processId &&
-      !block.processId &&
-      prev.type === "block" &&
-      block.type === "block" &&
-      prev.start + prev.size === block.start
-    ) {
-      prev.size += block.size;
-    } else {
-      merged.push({ ...block });
-    }
-  }
-
-  return merged;
-}
-
-function splitIntoSegments(totalSize) {
-  const ratios = [
-    { name: "Code", ratio: 0.25 },
-    { name: "Data", ratio: 0.25 },
-    { name: "Heap", ratio: 0.3 },
-    { name: "Stack", ratio: 0.2 },
-  ];
-
-  const segments = ratios.map((s) => ({
-    name: s.name,
-    size: Math.max(1, Math.round(totalSize * s.ratio)),
-  }));
-
-  let sum = segments.reduce((acc, s) => acc + s.size, 0);
-
-  while (sum > totalSize) {
-    const idx = segments.reduce(
-      (maxIdx, s, i) => (s.size > segments[maxIdx].size ? i : maxIdx),
-      0
-    );
-    segments[idx].size -= 1;
-    sum -= 1;
-  }
-
-  while (sum < totalSize) {
-    segments[segments.length - 1].size += 1;
-    sum += 1;
-  }
-
-  return segments.filter((s) => s.size > 0);
+  return makeFreeFrame(block.start, block.size, block.frameIndex);
 }
 
 function pushEvent(state, event) {
@@ -165,15 +90,7 @@ function pushEvent(state, event) {
 }
 
 function getItemLabel(item) {
-  if (item.kind === "page") {
-    return `${item.processName}:P${item.pageIndex}`;
-  }
-
-  if (item.kind === "segment-page") {
-    return `${item.processName}:${item.segmentName[0]}P${item.segmentPageIndex}`;
-  }
-
-  return `${item.processName}:${item.segmentName}`;
+  return `${item.processName}:P${item.pageIndex}`;
 }
 
 function cloneForAccess(state) {
@@ -277,16 +194,15 @@ export function createInitialState(
   replacementPolicy = DEFAULT_REPLACEMENT_POLICY
 ) {
   resetColor();
+  const vmStrategy = normalizeVmStrategy(strategy);
 
   return {
     totalMemory,
     pageSize,
-    strategy,
+    strategy: vmStrategy,
     replacementPolicy: normalizeReplacementPolicy(replacementPolicy),
 
-    blocks: isPaged(strategy)
-      ? createFrames(totalMemory, pageSize)
-      : [makeFreeBlock(0, totalMemory)],
+    blocks: createFrames(totalMemory, pageSize),
 
     virtualItems: [],
     processes: [],
@@ -317,94 +233,19 @@ function createPagingItems(processId, processName, size, color, pageSize) {
   return items;
 }
 
-function createSegmentationItems(processId, processName, size, color) {
-  let cursor = 0;
-
-  return splitIntoSegments(size).map((seg, segmentIndex) => {
-    const item = {
-      ...createBaseItem(processId, processName, color),
-      kind: "segment",
-      segmentName: seg.name,
-      segmentIndex,
-      size: seg.size,
-      usedSize: seg.size,
-      virtualStart: cursor,
-    };
-
-    cursor += seg.size;
-    return item;
-  });
-}
-
-function createSegmentedPagingItems(
-  processId,
-  processName,
-  size,
-  color,
-  pageSize
-) {
-  const segments = splitIntoSegments(size);
-  const items = [];
-  let virtualCursor = 0;
-
-  segments.forEach((seg, segmentIndex) => {
-    const pagesNeeded = Math.ceil(seg.size / pageSize);
-
-    for (
-      let segmentPageIndex = 0;
-      segmentPageIndex < pagesNeeded;
-      segmentPageIndex++
-    ) {
-      const remaining = seg.size - segmentPageIndex * pageSize;
-
-      items.push({
-        ...createBaseItem(processId, processName, color),
-        kind: "segment-page",
-        segmentName: seg.name,
-        segmentIndex,
-        segmentPageIndex,
-        size: pageSize,
-        usedSize: Math.min(pageSize, remaining),
-        virtualStart: virtualCursor + segmentPageIndex * pageSize,
-      });
-    }
-
-    virtualCursor += seg.size;
-  });
-
-  return items;
-}
-
 export function allocate(state, processName, size) {
   if (!Number.isFinite(size) || size <= 0) return state;
 
   const processId = uid();
   const color = nextColor();
-  let items = [];
-
-  if (state.strategy === "paging") {
-    items = createPagingItems(
-      processId,
-      processName,
-      size,
-      color,
-      state.pageSize
-    );
-  }
-
-  if (state.strategy === "segmentation") {
-    items = createSegmentationItems(processId, processName, size, color);
-  }
-
-  if (state.strategy === "segmented-paging") {
-    items = createSegmentedPagingItems(
-      processId,
-      processName,
-      size,
-      color,
-      state.pageSize
-    );
-  }
+  const strategy = normalizeVmStrategy(state.strategy);
+  const items = createPagingItems(
+    processId,
+    processName,
+    size,
+    color,
+    state.pageSize
+  );
 
   const newProcess = {
     id: processId,
@@ -416,6 +257,7 @@ export function allocate(state, processName, size) {
 
   return {
     ...state,
+    strategy,
     replacementPolicy: normalizeReplacementPolicy(state.replacementPolicy),
     processes: [...state.processes, newProcess],
     virtualItems: [...state.virtualItems, ...items],
@@ -426,8 +268,8 @@ export function allocate(state, processName, size) {
         processId,
         processName,
         size,
-        strategy: state.strategy,
-        detail: `Created virtual address space for ${processName}. New pages or segments start in the SSD/Page File.`,
+        strategy,
+        detail: `Created pages for ${processName}. New pages start in the Swap space / Page file.`,
         timestamp: Date.now(),
       },
     ],
@@ -467,7 +309,7 @@ function accessPagedItem(state, itemId, options = {}) {
     type: "page-fault",
     processId: item.processId,
     processName: item.processName,
-    detail: `Page fault: ${getItemLabel(item)} is in the SSD/Page File and must be loaded into RAM.`,
+    detail: `Page fault: ${getItemLabel(item)} is in the Swap space / Page file and must be loaded into RAM.`,
   });
 
   let frameIndex = next.blocks.findIndex((block) => !block.processId);
@@ -520,7 +362,7 @@ function accessPagedItem(state, itemId, options = {}) {
       type: "swap-out",
       processId: victim.processId,
       processName: victim.processName,
-      detail: `Swap out ${getItemLabel(victim)} from RAM to the SSD/Page File using ${next.replacementPolicy.toUpperCase()}.`,
+      detail: `Swap out ${getItemLabel(victim)} from RAM to the Swap space / Page file using ${next.replacementPolicy.toUpperCase()}.`,
     });
   }
 
@@ -551,160 +393,14 @@ function accessPagedItem(state, itemId, options = {}) {
     type: "swap-in",
     processId: item.processId,
     processName: item.processName,
-    detail: `Swap in ${getItemLabel(item)} from the SSD/Page File to Frame ${frame.frameIndex}.`,
-  });
-
-  return next;
-}
-
-function accessSegmentItem(state, itemId, options = {}) {
-  const next = cloneForAccess(state);
-  const futureItemIds = options.futureItemIds ?? [];
-
-  next.accessClock += 1;
-
-  const itemIndex = next.virtualItems.findIndex((item) => item.id === itemId);
-  if (itemIndex === -1) return state;
-
-  const item = next.virtualItems[itemIndex];
-
-  if (item.location === "ram") {
-    next.virtualItems[itemIndex] = {
-      ...item,
-      lastAccessedAt: next.accessClock,
-    };
-
-    pushEvent(next, {
-      type: "hit",
-      processId: item.processId,
-      processName: item.processName,
-      detail: `${getItemLabel(item)} is already in RAM.`,
-    });
-
-    return next;
-  }
-
-  next.pageFaults += 1;
-
-  pushEvent(next, {
-    type: "page-fault",
-    processId: item.processId,
-    processName: item.processName,
-    detail: `Segment fault: ${getItemLabel(item)} is in the SSD/Page File and must be loaded into RAM.`,
-  });
-
-  let blockIndex = next.blocks.findIndex(
-    (block) => !block.processId && block.size >= item.size
-  );
-
-  while (blockIndex === -1) {
-    const victimItemId = selectVictimItemId(next, futureItemIds);
-
-    if (!victimItemId) break;
-
-    const victimIndex = next.virtualItems.findIndex(
-      (x) => x.id === victimItemId
-    );
-    const victim = next.virtualItems[victimIndex];
-    const victimBlockIndex = next.blocks.findIndex(
-      (block) => block.itemId === victim.id
-    );
-
-    if (victimBlockIndex === -1) {
-      next.fifoQueue = next.fifoQueue.filter((id) => id !== victimItemId);
-      next.virtualItems[victimIndex] = {
-        ...victim,
-        location: "ssd",
-        ramStart: null,
-        loadedAt: null,
-        lastAccessedAt: null,
-      };
-      continue;
-    }
-
-    next.blocks[victimBlockIndex] = resetBlock(next.blocks[victimBlockIndex]);
-    next.blocks = mergeAdjacentFree(next.blocks);
-    next.virtualItems[victimIndex] = {
-      ...victim,
-      location: "ssd",
-      ramStart: null,
-      loadedAt: null,
-      lastAccessedAt: null,
-    };
-    next.fifoQueue = next.fifoQueue.filter((id) => id !== victimItemId);
-
-    pushEvent(next, {
-      type: "swap-out",
-      processId: victim.processId,
-      processName: victim.processName,
-      detail: `Swap out ${getItemLabel(victim)} from RAM to the SSD/Page File using ${next.replacementPolicy.toUpperCase()}.`,
-    });
-
-    blockIndex = next.blocks.findIndex(
-      (block) => !block.processId && block.size >= item.size
-    );
-  }
-
-  if (blockIndex === -1) {
-    pushEvent(next, {
-      type: "fail",
-      processId: item.processId,
-      processName: item.processName,
-      detail: `No contiguous RAM block is large enough to load ${getItemLabel(item)} (${item.size} KB).`,
-    });
-
-    return next;
-  }
-
-  const block = next.blocks[blockIndex];
-
-  const allocated = {
-    ...block,
-    id: uid(),
-    size: item.size,
-    processId: item.processId,
-    processName: item.processName,
-    itemId: item.id,
-    color: item.color,
-  };
-
-  const replacement = [allocated];
-
-  if (block.size > item.size) {
-    replacement.push(
-      makeFreeBlock(block.start + item.size, block.size - item.size)
-    );
-  }
-
-  next.blocks.splice(blockIndex, 1, ...replacement);
-
-  next.virtualItems[itemIndex] = {
-    ...item,
-    location: "ram",
-    ramStart: allocated.start,
-    loadedAt: next.accessClock,
-    lastAccessedAt: next.accessClock,
-  };
-
-  next.fifoQueue = next.fifoQueue.filter((id) => id !== item.id);
-  next.fifoQueue.push(item.id);
-
-  pushEvent(next, {
-    type: "swap-in",
-    processId: item.processId,
-    processName: item.processName,
-    detail: `Swap in ${getItemLabel(item)} from the SSD/Page File to RAM at ${allocated.start} KB.`,
+    detail: `Swap in ${getItemLabel(item)} from the Swap space / Page file to Frame ${frame.frameIndex}.`,
   });
 
   return next;
 }
 
 export function accessItem(state, itemId, options = {}) {
-  if (isPaged(state.strategy)) {
-    return accessPagedItem(state, itemId, options);
-  }
-
-  return accessSegmentItem(state, itemId, options);
+  return accessPagedItem(state, itemId, options);
 }
 
 export function runReferenceString(state, itemIds) {
@@ -745,10 +441,6 @@ export function freeProcess(state, processId) {
     block.processId === processId ? resetBlock(block) : block
   );
 
-  if (!isPaged(state.strategy)) {
-    newBlocks = mergeAdjacentFree(newBlocks);
-  }
-
   const remainingItems = state.virtualItems.filter(
     (item) => item.processId !== processId
   );
@@ -756,6 +448,7 @@ export function freeProcess(state, processId) {
 
   return {
     ...state,
+    strategy: normalizeVmStrategy(state.strategy),
     blocks: newBlocks.sort((a, b) => a.start - b.start),
     processes: state.processes.filter((p) => p.id !== processId),
     virtualItems: remainingItems,
@@ -769,8 +462,8 @@ export function freeProcess(state, processId) {
         processId,
         processName: process.name,
         size: process.size,
-        strategy: state.strategy,
-        detail: `Released ${process.name} from virtual memory, RAM, and the SSD/Page File.`,
+        strategy: normalizeVmStrategy(state.strategy),
+        detail: `Released ${process.name} from virtual memory, RAM, and the Swap space / Page file.`,
         timestamp: Date.now(),
       },
     ],
@@ -795,15 +488,11 @@ export function getMetrics(state) {
     0
   );
 
-  const externalFragmentation =
-    state.strategy === "segmentation" && freeRam > 0
-      ? Math.round(((freeRam - largestFreeBlock) / freeRam) * 100)
-      : 0;
+  const externalFragmentation = 0;
 
   const ramItems = state.virtualItems.filter((item) => item.location === "ram");
 
   const internalWaste = ramItems.reduce((sum, item) => {
-    if (state.strategy === "segmentation") return sum;
     return sum + Math.max(0, item.size - item.usedSize);
   }, 0);
 

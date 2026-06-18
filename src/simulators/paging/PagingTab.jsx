@@ -1,6 +1,6 @@
 // simulators/paging/PagingTab.jsx
 // src/simulators/paging/PagingTab.jsx
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import {
   createInitialState,
   allocate,
